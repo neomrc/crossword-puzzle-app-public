@@ -1,5 +1,6 @@
 const AUTO_CHECK_KEY = 'crossword-auto-check-enabled';
 let celebrationShownFor = null;
+let repositionTimer = 0;
 
 function isGameVisible() {
   return Boolean(document.querySelector('.grid'));
@@ -65,102 +66,89 @@ function detectCompletion() {
   if (document.querySelector('.completion')) showCelebration();
 }
 
-function positionClueBar() {
-  const clue = document.querySelector('.bottom-clue');
-  if (!clue) return;
-
+function updateKeyboardLayout() {
   const viewport = window.visualViewport;
-  if (!viewport || !document.body.classList.contains('native-keyboard-open')) {
-    clue.style.removeProperty('top');
-    clue.style.removeProperty('left');
-    clue.style.removeProperty('width');
-    clue.style.removeProperty('bottom');
-    return;
-  }
+  const height = viewport?.height || window.innerHeight;
+  const top = viewport?.offsetTop || 0;
+  const width = viewport?.width || window.innerWidth;
+  const left = viewport?.offsetLeft || 0;
 
-  const height = clue.getBoundingClientRect().height || 56;
-  const top = viewport.offsetTop + viewport.height - height;
+  document.documentElement.style.setProperty('--visual-height', `${height}px`);
+  document.documentElement.style.setProperty('--visual-top', `${top}px`);
 
+  const clue = document.querySelector('.bottom-clue');
+  if (!clue || !document.body.classList.contains('native-keyboard-open')) return;
+
+  const clueHeight = clue.getBoundingClientRect().height || 58;
   clue.style.position = 'fixed';
-  clue.style.top = `${Math.round(top)}px`;
+  clue.style.top = `${Math.round(top + height - clueHeight)}px`;
   clue.style.bottom = 'auto';
-  clue.style.left = `${Math.round(viewport.offsetLeft)}px`;
-  clue.style.width = `${Math.round(viewport.width)}px`;
+  clue.style.left = `${Math.round(left)}px`;
+  clue.style.width = `${Math.round(width)}px`;
 }
 
-function keepActiveCellVisible() {
+function repositionActiveCell() {
+  if (!document.body.classList.contains('native-keyboard-open')) return;
+
   const input = document.activeElement?.matches?.('.cell input')
     ? document.activeElement
     : document.querySelector('.cell.active input');
   const cell = input?.closest('.cell');
   const scroller = document.querySelector('.board-wrap');
-  if (!cell || !scroller || !document.body.classList.contains('native-keyboard-open')) return;
+  if (!cell || !scroller) return;
 
-  const scrollerRect = scroller.getBoundingClientRect();
   const cellRect = cell.getBoundingClientRect();
-  const padding = 14;
-  const visibleTop = scrollerRect.top + padding;
-  const visibleBottom = scrollerRect.bottom - padding;
+  const scrollerRect = scroller.getBoundingClientRect();
+  const margin = 18;
 
-  let delta = 0;
-  if (cellRect.bottom > visibleBottom) delta = cellRect.bottom - visibleBottom;
-  else if (cellRect.top < visibleTop) delta = cellRect.top - visibleTop;
-
-  if (Math.abs(delta) > 1) scroller.scrollBy({ top: delta, left: 0, behavior: 'auto' });
+  if (cellRect.bottom > scrollerRect.bottom - margin) {
+    scroller.scrollTop += cellRect.bottom - scrollerRect.bottom + margin;
+  } else if (cellRect.top < scrollerRect.top + margin) {
+    scroller.scrollTop -= scrollerRect.top + margin - cellRect.top;
+  }
 }
 
-function settleKeyboardLayout() {
-  positionClueBar();
-  keepActiveCellVisible();
+function scheduleStableReposition(delay = 260) {
+  window.clearTimeout(repositionTimer);
+  repositionTimer = window.setTimeout(() => {
+    updateKeyboardLayout();
+    repositionActiveCell();
+  }, delay);
 }
 
-function stabilizeViewport() {
-  const viewport = window.visualViewport;
-  if (!viewport) return;
-
-  const keyboardInset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
-  document.documentElement.style.setProperty('--keyboard-inset', `${keyboardInset}px`);
-  document.documentElement.style.setProperty('--visual-height', `${viewport.height}px`);
-  document.documentElement.style.setProperty('--visual-top', `${viewport.offsetTop}px`);
-  document.body.classList.toggle('native-keyboard-open', keyboardInset > 120);
-
-  requestAnimationFrame(settleKeyboardLayout);
+function activateKeyboardMode() {
+  document.body.classList.add('native-keyboard-open');
+  updateKeyboardLayout();
+  scheduleStableReposition(300);
 }
 
-function scheduleVisibilityCorrection() {
-  [0, 70, 180, 320, 500].forEach(delay => window.setTimeout(() => {
-    stabilizeViewport();
-    keepActiveCellVisible();
-  }, delay));
+function deactivateKeyboardMode() {
+  window.setTimeout(() => {
+    if (document.activeElement?.matches?.('.cell input')) return;
+    document.body.classList.remove('native-keyboard-open');
+    window.clearTimeout(repositionTimer);
+    const clue = document.querySelector('.bottom-clue');
+    clue?.style.removeProperty('top');
+    clue?.style.removeProperty('left');
+    clue?.style.removeProperty('width');
+    clue?.style.removeProperty('bottom');
+  }, 120);
 }
 
 function enhanceCurrentScreen() {
   if (!isGameVisible()) return;
   addAutoCheckToggle();
   detectCompletion();
-  stabilizeViewport();
 }
-
-document.addEventListener('pointerdown', event => {
-  if (!event.target.closest?.('.cell:not(.block)')) return;
-  scheduleVisibilityCorrection();
-}, true);
 
 document.addEventListener('focusin', event => {
   if (!event.target.matches?.('.cell input')) return;
-  const input = event.target;
-  requestAnimationFrame(() => {
-    try {
-      if (input.value) input.setSelectionRange(0, input.value.length);
-      else input.setSelectionRange(0, 0);
-    } catch {}
-    scheduleVisibilityCorrection();
-  });
+  activateKeyboardMode();
 }, true);
 
 document.addEventListener('focusout', event => {
   if (!event.target.matches?.('.cell input')) return;
-  window.setTimeout(stabilizeViewport, 100);
+  deactivateKeyboardMode();
 }, true);
 
 document.addEventListener('input', event => {
@@ -170,7 +158,7 @@ document.addEventListener('input', event => {
     requestAnimationFrame(() => document.querySelector('#check')?.click());
   }
 
-  scheduleVisibilityCorrection();
+  scheduleStableReposition(120);
 
   if (allPlayableCellsFilled()) {
     window.setTimeout(() => document.querySelector('#done')?.click(), 30);
@@ -180,13 +168,9 @@ document.addEventListener('input', event => {
 const observer = new MutationObserver(() => enhanceCurrentScreen());
 observer.observe(document.documentElement, { childList: true, subtree: true });
 
-if (window.visualViewport) {
-  window.visualViewport.addEventListener('resize', stabilizeViewport);
-  window.visualViewport.addEventListener('scroll', stabilizeViewport);
-}
-
+window.visualViewport?.addEventListener('resize', updateKeyboardLayout);
+window.visualViewport?.addEventListener('scroll', updateKeyboardLayout);
 window.addEventListener('pageshow', enhanceCurrentScreen);
-window.addEventListener('resize', stabilizeViewport);
-window.addEventListener('orientationchange', () => window.setTimeout(stabilizeViewport, 150));
-stabilizeViewport();
+window.addEventListener('resize', updateKeyboardLayout);
+window.addEventListener('orientationchange', () => window.setTimeout(updateKeyboardLayout, 150));
 enhanceCurrentScreen();
