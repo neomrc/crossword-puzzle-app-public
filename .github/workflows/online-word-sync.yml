@@ -1,0 +1,70 @@
+name: Add online word refresh
+
+on:
+  push:
+    paths:
+      - '.github/workflows/online-word-sync.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add cached online word loading
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('app.js')
+          s = p.read_text()
+
+          marker = 'const progress=JSON.parse(localStorage.getItem(KEY)||"{}");'
+          block = '''const progress=JSON.parse(localStorage.getItem(KEY)||"{}");
+const ONLINE_WORDS_KEY="crossword-online-words-v1";
+let onlineSyncStarted=false;
+function classifyOnlineWord(word){const n=word.length;if(n<=5)return"easy";if(n<=7)return"medium";if(n<=10)return"hard";return"expert"}
+function mergeOnlineWords(items){for(const item of items||[]){const word=String(item.word||"").toUpperCase();const clue=String(item.clue||"").trim();if(!/^[A-Z]{4,15}$/.test(word)||!clue)continue;const bucket=classifyOnlineWord(word);if(!WORDS[bucket].some(([existing])=>existing===word))WORDS[bucket].push([word,clue])}}
+try{mergeOnlineWords(JSON.parse(localStorage.getItem(ONLINE_WORDS_KEY)||"[]"))}catch{}
+async function refreshOnlineWords(){if(onlineSyncStarted||!navigator.onLine)return;onlineSyncStarted=true;try{const patterns=["?????","??????","???????","????????","?????????","??????????"];const requests=patterns.map(pattern=>fetch(`https://api.datamuse.com/words?sp=${pattern}&md=d&max=20`).then(r=>{if(!r.ok)throw new Error(`Word source ${r.status}`);return r.json()}));const groups=await Promise.all(requests);const fresh=[];for(const group of groups){for(const item of group){const definition=Array.isArray(item.defs)&&item.defs.length?item.defs[0].replace(/^[a-z]+\\t/i,"").trim():"";if(definition)fresh.push({word:item.word,clue:definition})}}const unique=[...new Map(fresh.map(item=>[item.word.toLowerCase(),item])).values()].slice(0,80);if(unique.length){localStorage.setItem(ONLINE_WORDS_KEY,JSON.stringify(unique));mergeOnlineWords(unique);if(state.screen==="home")rebuildPuzzlesAndRender()}}catch(error){console.warn("Online word refresh unavailable",error)}}'''
+          if marker not in s:
+              raise SystemExit('progress marker missing')
+          s = s.replace(marker, block, 1)
+
+          old = 'const puzzles=[];for(const d of DIFFS)for(const s of SIZES)for(let l=1;l<=8;l++)puzzles.push(makePuzzle(d,s,l));'
+          new = '''const puzzles=[];
+function rebuildPuzzles(){puzzles.length=0;for(const d of DIFFS)for(const size of SIZES)for(let level=1;level<=8;level++)puzzles.push(makePuzzle(d,size,level))}
+function rebuildPuzzlesAndRender(){rebuildPuzzles();render()}
+rebuildPuzzles();'''
+          if old not in s:
+              raise SystemExit('puzzle initialization marker missing')
+          s = s.replace(old, new, 1)
+
+          tail = "if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./service-worker.js'));render();"
+          replacement = "if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./service-worker.js'));render();refreshOnlineWords();window.addEventListener('online',refreshOnlineWords);"
+          if tail not in s:
+              raise SystemExit('bootstrap marker missing')
+          s = s.replace(tail, replacement, 1)
+
+          p.write_text(s)
+          PY
+      - name: Bump offline cache
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('service-worker.js')
+          s=p.read_text()
+          s=re.sub(r'crossword-quest-public-v\d+', 'crossword-quest-public-v7', s, count=1)
+          p.write_text(s)
+          PY
+      - name: Commit online word refresh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.js service-worker.js
+          git commit -m "Fetch and cache new crossword words when online"
+          git push
