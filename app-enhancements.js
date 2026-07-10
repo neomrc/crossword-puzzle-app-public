@@ -89,23 +89,24 @@ function positionClueBar() {
 }
 
 function keepActiveCellVisible() {
-  const viewport = window.visualViewport;
   const input = document.activeElement?.matches?.('.cell input')
     ? document.activeElement
     : document.querySelector('.cell.active input');
   const cell = input?.closest('.cell');
-  if (!viewport || !cell || !document.body.classList.contains('native-keyboard-open')) return;
+  const scroller = document.querySelector('.board-wrap');
+  if (!cell || !scroller || !document.body.classList.contains('native-keyboard-open')) return;
 
-  const clueHeight = document.querySelector('.bottom-clue')?.getBoundingClientRect().height || 56;
-  const rect = cell.getBoundingClientRect();
-  const visibleTop = viewport.offsetTop + 8;
-  const visibleBottom = viewport.offsetTop + viewport.height - clueHeight - 10;
+  const scrollerRect = scroller.getBoundingClientRect();
+  const cellRect = cell.getBoundingClientRect();
+  const padding = 14;
+  const visibleTop = scrollerRect.top + padding;
+  const visibleBottom = scrollerRect.bottom - padding;
 
   let delta = 0;
-  if (rect.bottom > visibleBottom) delta = rect.bottom - visibleBottom;
-  else if (rect.top < visibleTop) delta = rect.top - visibleTop;
+  if (cellRect.bottom > visibleBottom) delta = cellRect.bottom - visibleBottom;
+  else if (cellRect.top < visibleTop) delta = cellRect.top - visibleTop;
 
-  if (Math.abs(delta) > 1) window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
+  if (Math.abs(delta) > 1) scroller.scrollBy({ top: delta, left: 0, behavior: 'auto' });
 }
 
 function settleKeyboardLayout() {
@@ -119,13 +120,15 @@ function stabilizeViewport() {
 
   const keyboardInset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
   document.documentElement.style.setProperty('--keyboard-inset', `${keyboardInset}px`);
+  document.documentElement.style.setProperty('--visual-height', `${viewport.height}px`);
+  document.documentElement.style.setProperty('--visual-top', `${viewport.offsetTop}px`);
   document.body.classList.toggle('native-keyboard-open', keyboardInset > 120);
 
   requestAnimationFrame(settleKeyboardLayout);
 }
 
 function scheduleVisibilityCorrection() {
-  [0, 70, 180, 320].forEach(delay => window.setTimeout(() => {
+  [0, 70, 180, 320, 500].forEach(delay => window.setTimeout(() => {
     stabilizeViewport();
     keepActiveCellVisible();
   }, delay));
