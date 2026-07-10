@@ -66,18 +66,45 @@ function detectCompletion() {
   if (document.querySelector('.completion')) showCelebration();
 }
 
+function positionClueBar() {
+  const clue = document.querySelector('.bottom-clue');
+  if (!clue) return;
+
+  const viewport = window.visualViewport;
+  if (!viewport || !document.body.classList.contains('native-keyboard-open')) {
+    clue.style.removeProperty('top');
+    clue.style.removeProperty('left');
+    clue.style.removeProperty('width');
+    clue.style.removeProperty('bottom');
+    return;
+  }
+
+  const height = clue.getBoundingClientRect().height || 56;
+  const top = Math.max(viewport.offsetTop, viewport.offsetTop + viewport.height - height);
+
+  clue.style.position = 'fixed';
+  clue.style.top = `${Math.round(top)}px`;
+  clue.style.bottom = 'auto';
+  clue.style.left = `${Math.round(viewport.offsetLeft)}px`;
+  clue.style.width = `${Math.round(viewport.width)}px`;
+}
+
 function stabilizeViewport() {
   const viewport = window.visualViewport;
   if (!viewport) return;
+
   const keyboardInset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
   document.documentElement.style.setProperty('--keyboard-inset', `${keyboardInset}px`);
   document.body.classList.toggle('native-keyboard-open', keyboardInset > 120);
+
+  requestAnimationFrame(positionClueBar);
 }
 
 function enhanceCurrentScreen() {
   if (!isGameVisible()) return;
   addAutoCheckToggle();
   detectCompletion();
+  stabilizeViewport();
 }
 
 document.addEventListener('pointerdown', event => {
@@ -95,7 +122,13 @@ document.addEventListener('focusin', event => {
       else input.setSelectionRange(0, 0);
     } catch {}
     window.scrollTo(lastScroll.x, lastScroll.y);
+    stabilizeViewport();
   });
+}, true);
+
+document.addEventListener('focusout', event => {
+  if (!event.target.matches?.('.cell input')) return;
+  window.setTimeout(stabilizeViewport, 80);
 }, true);
 
 document.addEventListener('input', event => {
@@ -120,5 +153,6 @@ if (window.visualViewport) {
 
 window.addEventListener('pageshow', enhanceCurrentScreen);
 window.addEventListener('resize', stabilizeViewport);
+window.addEventListener('orientationchange', () => window.setTimeout(stabilizeViewport, 120));
 stabilizeViewport();
 enhanceCurrentScreen();
