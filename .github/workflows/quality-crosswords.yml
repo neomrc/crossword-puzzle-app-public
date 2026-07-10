@@ -1,0 +1,70 @@
+name: Enforce crossword quality
+
+on:
+  push:
+    paths:
+      - '.github/workflows/quality-crosswords.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replace generator with quality-gated version
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('app.js')
+          s = p.read_text()
+
+          core = r'''const CORE_WORDS=[
+          ["ACE","Top card or expert"],["ACT","Perform on stage"],["AIR","What we breathe"],["ANT","Tiny colony insect"],["ARC","Part of a circle"],["ARM","Body limb"],["ART","Creative expression"],["ASH","Fire remains"],["BAG","Container with handles"],["BAR","Long narrow counter"],["BAT","Flying mammal"],["BAY","Coastal inlet"],["BEE","Honey-making insect"],["BELL","Ringing object"],["BIRD","Feathered animal"],["BOAT","Small watercraft"],["BOOK","Bound pages"],["BOOT","Footwear above the ankle"],["BOWL","Round food container"],["CAKE","Sweet baked dessert"],["CARD","Small piece of stiff paper"],["CART","Wheeled carrier"],["CAVE","Natural underground chamber"],["CITY","Large town"],["CLAY","Material used in pottery"],["COAT","Outer garment"],["COLD","Opposite of hot"],["CROW","Black bird"],["DARK","Without much light"],["DART","Small pointed missile"],["DAWN","First light of day"],["DEER","Antlered animal"],["DICE","Cubes used in games"],["DOOR","Entryway panel"],["DOVE","Bird symbolizing peace"],["DRUM","Percussion instrument"],["DUSK","Time just after sunset"],["EAST","Direction of sunrise"],["ECHO","Repeated sound"],["EDGE","Outer boundary"],["ELM","Shade tree"],["FARM","Land used for crops"],["FISH","Animal with fins"],["FLAG","National banner"],["FROG","Leaping amphibian"],["GATE","Movable barrier"],["GIFT","Present"],["GLOW","Soft steady light"],["GOAT","Horned farm animal"],["GOLD","Precious yellow metal"],["HARP","Stringed instrument"],["HAT","Head covering"],["HAWK","Bird of prey"],["HILL","Raised area of land"],["HOME","Place where one lives"],["HOOK","Curved fastening tool"],["ICE","Frozen water"],["INK","Writing fluid"],["IRON","Strong metal"],["ISLE","Small island"],["JADE","Green gemstone"],["JAR","Wide-mouthed container"],["KITE","Toy flown in the wind"],["LAKE","Body of inland water"],["LAMP","Portable light"],["LEAF","Flat green plant part"],["LION","Large wild cat"],["LOCK","Security device"],["MAP","Diagram of an area"],["MASK","Face covering"],["MOON","Earth's natural satellite"],["NEST","Bird's home"],["NORTH","Compass direction"],["NOTE","Short written message"],["OAK","Strong hardwood tree"],["OAR","Boat-rowing tool"],["OCEAN","Vast saltwater body"],["OPAL","Colorful gemstone"],["OVEN","Appliance for baking"],["OWL","Nocturnal bird"],["PARK","Public green space"],["PEAR","Bell-shaped fruit"],["PINE","Evergreen tree"],["POND","Small body of water"],["RAIN","Water falling from clouds"],["RING","Circular band"],["ROAD","Route for vehicles"],["ROCK","Solid mineral material"],["ROPE","Strong twisted cord"],["ROSE","Fragrant flower"],["SAND","Fine beach grains"],["SHIP","Large sea vessel"],["SHOE","Footwear"],["SKY","Space above Earth"],["SNOW","Frozen precipitation"],["STAR","Bright object in the night sky"],["STONE","Hard natural material"],["SUN","Star at the center of our system"],["SWAN","Large white water bird"],["TENT","Portable shelter"],["TIDE","Regular rise and fall of the sea"],["TREE","Tall woody plant"],["VASE","Decorative flower container"],["WAVE","Moving ridge of water"],["WEST","Direction of sunset"],["WIND","Moving air"],["WOLF","Wild canine"],["WOOD","Material from trees"]
+          ];'''
+
+          if 'const CORE_WORDS=' not in s:
+              anchor = 'const SIZES='
+              pos = s.find(anchor)
+              if pos < 0:
+                  raise SystemExit('Could not find constants anchor')
+              s = s[:pos] + core + '\n' + s[pos:]
+
+          generator = r'''function seeded(seed){let x=Math.sin(seed)*10000;return x-Math.floor(x)}
+          function shuffled(items,seed){return [...items].sort((a,b)=>seeded(seed+a[0].charCodeAt(0)+a[0].length)-seeded(seed+b[0].charCodeAt(0)+b[0].length))}
+          function canPlace(grid,word,row,col,direction,size){let crossings=0;for(let i=0;i<word.length;i++){const r=row+(direction==="down"?i:0),c=col+(direction==="across"?i:0);if(r<0||c<0||r>=size||c>=size)return null;const current=grid[r][c];if(current!=="#"&&current!==word[i])return null;if(current===word[i])crossings++;if(current==="#"){if(direction==="across"){if(r>0&&grid[r-1][c]!=="#")return null;if(r<size-1&&grid[r+1][c]!=="#")return null}else{if(c>0&&grid[r][c-1]!=="#")return null;if(c<size-1&&grid[r][c+1]!=="#")return null}}}const br=row-(direction==="down"?1:0),bc=col-(direction==="across"?1:0),ar=row+(direction==="down"?word.length:0),ac=col+(direction==="across"?word.length:0);if(br>=0&&bc>=0&&br<size&&bc<size&&grid[br][bc]!=="#")return null;if(ar>=0&&ac>=0&&ar<size&&ac<size&&grid[ar][ac]!=="#")return null;return crossings}
+          function writeWord(grid,word,row,col,direction){for(let i=0;i<word.length;i++){const r=row+(direction==="down"?i:0),c=col+(direction==="across"?i:0);grid[r][c]=word[i]}}
+          function buildAttempt(d,s,l,attempt){const seed=l*997+s*131+DIFFS.indexOf(d)*503+attempt*7919;const all=[...(WORDS[d]||[]),...CORE_WORDS];const seen=new Set();const bank=shuffled(all.filter(([w])=>w.length>=3&&w.length<=s&&!seen.has(w)&&seen.add(w)),seed);const grid=Array.from({length:s},()=>Array(s).fill("#"));const entries=[];const first=bank[0];if(!first)return null;const dir=seeded(seed)>.5?"across":"down";const row=dir==="across"?Math.floor(s/2):Math.floor((s-first[0].length)/2);const col=dir==="across"?Math.floor((s-first[0].length)/2):Math.floor(s/2);writeWord(grid,first[0],row,col,dir);entries.push({answer:first[0],clue:first[1],row,col,direction:dir});for(const [word,clue] of bank.slice(1)){let best=null;for(const placed of entries){for(let wi=0;wi<word.length;wi++)for(let pi=0;pi<placed.answer.length;pi++){if(word[wi]!==placed.answer[pi])continue;const direction=placed.direction==="across"?"down":"across";const crossR=placed.row+(placed.direction==="down"?pi:0),crossC=placed.col+(placed.direction==="across"?pi:0);const startR=crossR-(direction==="down"?wi:0),startC=crossC-(direction==="across"?wi:0);const crossings=canPlace(grid,word,startR,startC,direction,s);if(crossings===null||crossings<1)continue;const score=crossings*100-seeded(seed+wi*17+pi*29);if(!best||score>best.score)best={row:startR,col:startC,direction,score}}}if(best){writeWord(grid,word,best.row,best.col,best.direction);entries.push({answer:word,clue,row:best.row,col:best.col,direction:best.direction})}if(entries.length>=Math.max(5,Math.floor(s*1.1)))break}return{grid,entries,seed}}
+          function numberPuzzle(result,d,s,l){const starts=[...new Set(result.entries.map(e=>`${e.row},${e.col}`))].sort((a,b)=>{const[ar,ac]=a.split(',').map(Number),[br,bc]=b.split(',').map(Number);return ar-br||ac-bc});const nums=new Map(starts.map((k,i)=>[k,i+1]));result.entries.forEach(e=>e.number=nums.get(`${e.row},${e.col}`));return{d,s,l,id:id(d,s,l),grid:result.grid,entries:result.entries,date:dateForLevel(l),seed:result.seed}}
+          function makePuzzle(d,s,l){const minimum=s<=5?5:s<=7?6:s<=9?7:s<=11?8:s<=13?9:10;let best=null;for(let attempt=0;attempt<60;attempt++){const candidate=buildAttempt(d,s,l,attempt);if(candidate&&(!best||candidate.entries.length>best.entries.length))best=candidate;if(best&&best.entries.length>=minimum)break}if(!best||best.entries.length<minimum){const compatible=[...CORE_WORDS,...Object.values(WORDS).flat()].filter(([w])=>w.length<=s);for(let attempt=60;attempt<160;attempt++){const original=WORDS[d];WORDS[d]=compatible;const candidate=buildAttempt(d,s,l,attempt);WORDS[d]=original;if(candidate&&(!best||candidate.entries.length>best.entries.length))best=candidate;if(best&&best.entries.length>=minimum)break}}if(!best||best.entries.length<3)throw new Error(`Unable to generate ${s}x${s} puzzle`);return numberPuzzle(best,d,s,l)}'''
+
+          pattern = r'function seeded\(seed\).*?function makePuzzle\(d,s,l\).*?\}\n(?=const puzzles|const puzzleProgress|const ONLINE_WORDS_KEY)'
+          updated, count = re.subn(pattern, generator + '\n', s, count=1, flags=re.S)
+          if count == 0:
+              pattern2 = r'function makePuzzle\(d,s,l\)\{.*?return\{d,s,l,id:id\(d,s,l\),grid,entries,date:dateForLevel\(l\)\}\}'
+              updated, count = re.subn(pattern2, generator, s, count=1, flags=re.S)
+          if count != 1:
+              raise SystemExit(f'Generator replacement failed: {count}')
+
+          p.write_text(updated)
+          PY
+      - name: Bump cache
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('service-worker.js')
+          s=p.read_text()
+          s=re.sub(r'crossword-quest-public-v\d+', 'crossword-quest-public-v8', s, count=1)
+          p.write_text(s)
+          PY
+      - name: Commit quality generator
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.js service-worker.js
+          git commit -m "Reject sparse puzzles and enforce minimum clue counts"
+          git push
