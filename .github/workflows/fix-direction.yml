@@ -1,0 +1,42 @@
+name: Fix crossword direction switching
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-direction.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch direction handling
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('app.js')
+          s = p.read_text()
+          old_move = '''function move(entry,delta){if(!entry||!state.selected)return;const[r,c]=state.selected;let i=entry.direction==="across"?c-entry.col:r-entry.row;i=Math.max(0,Math.min(entry.answer.length-1,i+delta));state.selected=entry.direction==="across"?[entry.row,entry.col+i]:[entry.row+i,entry.col]}'''
+          new_move = '''function move(entry,delta){if(!entry||!state.selected)return;const[r,c]=state.selected;let i=entry.direction==="across"?c-entry.col:r-entry.row;const next=i+delta;if(next>=0&&next<entry.answer.length){state.selected=entry.direction==="across"?[entry.row,entry.col+next]:[entry.row+next,entry.col];return}const sameDirection=state.puzzle.entries.filter(e=>e.direction===entry.direction);const currentIndex=sameDirection.indexOf(entry);const target=sameDirection[(currentIndex+(delta>0?1:-1)+sameDirection.length)%sameDirection.length];state.selected=delta>0?[target.row,target.col]:target.direction==="across"?[target.row,target.col+target.answer.length-1]:[target.row+target.answer.length-1,target.col]}'''
+          old_select = '''function selectCell(pos,toggle=false){const same=state.selected&&pos[0]===state.selected[0]&&pos[1]===state.selected[1];state.selected=pos;const options=entriesForCell(state.puzzle,...pos);if(toggle&&same&&options.length>1)state.direction=state.direction==="across"?"down":"across";else if(!options.some(e=>e.direction===state.direction))state.direction=options[0]?.direction||state.direction;state.tab=state.direction;updateSelectionUI();requestAnimationFrame(focusSelected)}'''
+          new_select = '''function selectCell(pos,toggle=false){const same=state.selected&&pos[0]===state.selected[0]&&pos[1]===state.selected[1];state.selected=pos;const options=entriesForCell(state.puzzle,...pos);if(toggle&&same&&options.length>1){const current=options.findIndex(e=>e.direction===state.direction);state.direction=options[(current+1+options.length)%options.length].direction}else if(!options.some(e=>e.direction===state.direction)){state.direction=options[0]?.direction||state.direction}state.tab=state.direction;updateSelectionUI();requestAnimationFrame(focusSelected)}'''
+          old_tabs = '''document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;state.direction=b.dataset.tab;render()});'''
+          new_tabs = '''document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{const dir=b.dataset.tab;state.tab=dir;state.direction=dir;const options=state.selected?entriesForCell(state.puzzle,...state.selected):[];const matching=options.find(e=>e.direction===dir)||state.puzzle.entries.find(e=>e.direction===dir);if(matching&&!options.some(e=>e.direction===dir))state.selected=[matching.row,matching.col];updateSelectionUI();document.querySelectorAll('[data-tab]').forEach(x=>x.classList.toggle('active',x.dataset.tab===dir));requestAnimationFrame(focusSelected)});'''
+          for old, new, name in [(old_move,new_move,'move'),(old_select,new_select,'selectCell'),(old_tabs,new_tabs,'tabs')]:
+              if old not in s:
+                  raise SystemExit(f'Could not find {name} block')
+              s = s.replace(old,new,1)
+          p.write_text(s)
+          PY
+      - name: Bump service worker cache
+        run: sed -i 's/crossword-quest-public-v4/crossword-quest-public-v5/' service-worker.js
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.js service-worker.js
+          git commit -m "Fix direction switching and word continuation"
+          git push
