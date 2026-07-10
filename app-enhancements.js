@@ -6,6 +6,20 @@ function isGameVisible() {
   return Boolean(document.querySelector('.grid'));
 }
 
+function autoCheckEnabled() {
+  return localStorage.getItem(AUTO_CHECK_KEY) === 'true';
+}
+
+function runAutoCheck() {
+  if (!autoCheckEnabled()) return;
+  const checkButton = document.querySelector('#check');
+  if (checkButton) checkButton.click();
+}
+
+function clearWrongMarks() {
+  document.querySelectorAll('.cell.wrong').forEach(cell => cell.classList.remove('wrong'));
+}
+
 function allPlayableCellsFilled() {
   const inputs = [...document.querySelectorAll('.cell:not(.block) input')];
   return inputs.length > 0 && inputs.every(input => input.value.trim().length === 1);
@@ -13,21 +27,33 @@ function allPlayableCellsFilled() {
 
 function addAutoCheckToggle() {
   const toolbar = document.querySelector('.toolbar .tool-group');
-  if (!toolbar || document.querySelector('#autoCheckToggle')) return;
+  if (!toolbar) return;
 
-  const enabled = localStorage.getItem(AUTO_CHECK_KEY) === 'true';
+  const manualCheck = document.querySelector('#check');
+  if (manualCheck) {
+    manualCheck.hidden = true;
+    manualCheck.setAttribute('aria-hidden', 'true');
+    manualCheck.tabIndex = -1;
+  }
+
+  if (document.querySelector('#autoCheckToggle')) {
+    if (autoCheckEnabled()) runAutoCheck();
+    else clearWrongMarks();
+    return;
+  }
+
   const label = document.createElement('label');
   label.className = 'native-auto-check';
   label.innerHTML = `
-    <input id="autoCheckToggle" type="checkbox" ${enabled ? 'checked' : ''} />
+    <input id="autoCheckToggle" type="checkbox" ${autoCheckEnabled() ? 'checked' : ''} />
     <span class="native-switch" aria-hidden="true"><span></span></span>
     <strong>Auto-check</strong>
   `;
 
   label.querySelector('input').addEventListener('change', event => {
     localStorage.setItem(AUTO_CHECK_KEY, String(event.target.checked));
-    if (event.target.checked) document.querySelector('#check')?.click();
-    else document.querySelectorAll('.cell.wrong').forEach(cell => cell.classList.remove('wrong'));
+    if (event.target.checked) runAutoCheck();
+    else clearWrongMarks();
   });
 
   toolbar.appendChild(label);
@@ -151,18 +177,30 @@ document.addEventListener('focusout', event => {
   deactivateKeyboardMode();
 }, true);
 
+// The crossword writes letters in beforeinput and prevents the normal input event.
+// Run validation after that handler has saved the new letter.
+document.addEventListener('beforeinput', event => {
+  if (!event.target.matches?.('.cell input')) return;
+  if (!event.inputType.startsWith('insert') && !event.inputType.startsWith('delete')) return;
+
+  window.setTimeout(() => {
+    if (autoCheckEnabled()) runAutoCheck();
+    else clearWrongMarks();
+    scheduleStableReposition(120);
+
+    if (allPlayableCellsFilled()) {
+      window.setTimeout(() => document.querySelector('#done')?.click(), 30);
+    }
+  }, 0);
+}, true);
+
+// Fallback for browsers that still dispatch input normally.
 document.addEventListener('input', event => {
   if (!event.target.matches?.('.cell input')) return;
-
-  if (localStorage.getItem(AUTO_CHECK_KEY) === 'true') {
-    requestAnimationFrame(() => document.querySelector('#check')?.click());
-  }
-
-  scheduleStableReposition(120);
-
-  if (allPlayableCellsFilled()) {
-    window.setTimeout(() => document.querySelector('#done')?.click(), 30);
-  }
+  window.setTimeout(() => {
+    if (autoCheckEnabled()) runAutoCheck();
+    else clearWrongMarks();
+  }, 0);
 }, true);
 
 const observer = new MutationObserver(() => enhanceCurrentScreen());
