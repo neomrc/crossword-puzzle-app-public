@@ -1,6 +1,5 @@
 const AUTO_CHECK_KEY = 'crossword-auto-check-enabled';
 let celebrationShownFor = null;
-let lastScroll = { x: 0, y: 0 };
 
 function isGameVisible() {
   return Boolean(document.querySelector('.grid'));
@@ -80,13 +79,38 @@ function positionClueBar() {
   }
 
   const height = clue.getBoundingClientRect().height || 56;
-  const top = Math.max(viewport.offsetTop, viewport.offsetTop + viewport.height - height);
+  const top = viewport.offsetTop + viewport.height - height;
 
   clue.style.position = 'fixed';
   clue.style.top = `${Math.round(top)}px`;
   clue.style.bottom = 'auto';
   clue.style.left = `${Math.round(viewport.offsetLeft)}px`;
   clue.style.width = `${Math.round(viewport.width)}px`;
+}
+
+function keepActiveCellVisible() {
+  const viewport = window.visualViewport;
+  const input = document.activeElement?.matches?.('.cell input')
+    ? document.activeElement
+    : document.querySelector('.cell.active input');
+  const cell = input?.closest('.cell');
+  if (!viewport || !cell || !document.body.classList.contains('native-keyboard-open')) return;
+
+  const clueHeight = document.querySelector('.bottom-clue')?.getBoundingClientRect().height || 56;
+  const rect = cell.getBoundingClientRect();
+  const visibleTop = viewport.offsetTop + 8;
+  const visibleBottom = viewport.offsetTop + viewport.height - clueHeight - 10;
+
+  let delta = 0;
+  if (rect.bottom > visibleBottom) delta = rect.bottom - visibleBottom;
+  else if (rect.top < visibleTop) delta = rect.top - visibleTop;
+
+  if (Math.abs(delta) > 1) window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
+}
+
+function settleKeyboardLayout() {
+  positionClueBar();
+  keepActiveCellVisible();
 }
 
 function stabilizeViewport() {
@@ -97,7 +121,14 @@ function stabilizeViewport() {
   document.documentElement.style.setProperty('--keyboard-inset', `${keyboardInset}px`);
   document.body.classList.toggle('native-keyboard-open', keyboardInset > 120);
 
-  requestAnimationFrame(positionClueBar);
+  requestAnimationFrame(settleKeyboardLayout);
+}
+
+function scheduleVisibilityCorrection() {
+  [0, 70, 180, 320].forEach(delay => window.setTimeout(() => {
+    stabilizeViewport();
+    keepActiveCellVisible();
+  }, delay));
 }
 
 function enhanceCurrentScreen() {
@@ -108,9 +139,8 @@ function enhanceCurrentScreen() {
 }
 
 document.addEventListener('pointerdown', event => {
-  const cell = event.target.closest?.('.cell:not(.block)');
-  if (!cell) return;
-  lastScroll = { x: window.scrollX, y: window.scrollY };
+  if (!event.target.closest?.('.cell:not(.block)')) return;
+  scheduleVisibilityCorrection();
 }, true);
 
 document.addEventListener('focusin', event => {
@@ -121,14 +151,13 @@ document.addEventListener('focusin', event => {
       if (input.value) input.setSelectionRange(0, input.value.length);
       else input.setSelectionRange(0, 0);
     } catch {}
-    window.scrollTo(lastScroll.x, lastScroll.y);
-    stabilizeViewport();
+    scheduleVisibilityCorrection();
   });
 }, true);
 
 document.addEventListener('focusout', event => {
   if (!event.target.matches?.('.cell input')) return;
-  window.setTimeout(stabilizeViewport, 80);
+  window.setTimeout(stabilizeViewport, 100);
 }, true);
 
 document.addEventListener('input', event => {
@@ -137,6 +166,8 @@ document.addEventListener('input', event => {
   if (localStorage.getItem(AUTO_CHECK_KEY) === 'true') {
     requestAnimationFrame(() => document.querySelector('#check')?.click());
   }
+
+  scheduleVisibilityCorrection();
 
   if (allPlayableCellsFilled()) {
     window.setTimeout(() => document.querySelector('#done')?.click(), 30);
@@ -153,6 +184,6 @@ if (window.visualViewport) {
 
 window.addEventListener('pageshow', enhanceCurrentScreen);
 window.addEventListener('resize', stabilizeViewport);
-window.addEventListener('orientationchange', () => window.setTimeout(stabilizeViewport, 120));
+window.addEventListener('orientationchange', () => window.setTimeout(stabilizeViewport, 150));
 stabilizeViewport();
 enhanceCurrentScreen();
