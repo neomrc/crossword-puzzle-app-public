@@ -1,0 +1,53 @@
+name: Improve crossword grid variety
+
+on:
+  push:
+    paths:
+      - '.github/workflows/randomize-grid.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replace puzzle generator
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('app.js')
+          s = p.read_text()
+
+          new_generator = r'''function seeded(seed){let x=Math.sin(seed)*10000;return x-Math.floor(x)}
+          function shuffled(items,seed){return [...items].sort((a,b)=>seeded(seed+a[0].charCodeAt(0)+a[0].length)-seeded(seed+b[0].charCodeAt(0)+b[0].length))}
+          function canPlace(grid,word,row,col,direction,size){let crossings=0;for(let i=0;i<word.length;i++){const r=row+(direction==="down"?i:0),c=col+(direction==="across"?i:0);if(r<0||c<0||r>=size||c>=size)return null;const current=grid[r][c];if(current!=="#"&&current!==word[i])return null;if(current===word[i])crossings++;if(current==="#"){if(direction==="across"){if(r>0&&grid[r-1][c]!=="#")return null;if(r<size-1&&grid[r+1][c]!=="#")return null}else{if(c>0&&grid[r][c-1]!=="#")return null;if(c<size-1&&grid[r][c+1]!=="#")return null}}}const beforeR=row-(direction==="down"?1:0),beforeC=col-(direction==="across"?1:0),afterR=row+(direction==="down"?word.length:0),afterC=col+(direction==="across"?word.length:0);if(beforeR>=0&&beforeC>=0&&beforeR<size&&beforeC<size&&grid[beforeR][beforeC]!=="#")return null;if(afterR>=0&&afterC>=0&&afterR<size&&afterC<size&&grid[afterR][afterC]!=="#")return null;return crossings}
+          function writeWord(grid,word,row,col,direction){for(let i=0;i<word.length;i++){const r=row+(direction==="down"?i:0),c=col+(direction==="across"?i:0);grid[r][c]=word[i]}}
+          function makePuzzle(d,s,l){const seed=l*97+s*31+DIFFS.indexOf(d)*211;const bank=shuffled(WORDS[d].filter(([w])=>w.length<=s),seed);const grid=Array.from({length:s},()=>Array(s).fill("#"));const entries=[];const first=bank[0]||["APPLE","Fruit"];const firstDirection=seeded(seed)>.5?"across":"down";const wiggle=Math.max(0,Math.floor(s*.18));const offset=Math.floor(seeded(seed+7)*(wiggle*2+1))-wiggle;const row=firstDirection==="across"?Math.max(0,Math.min(s-1,Math.floor(s/2)+offset)):Math.max(0,Math.floor((s-first[0].length)/2));const col=firstDirection==="across"?Math.max(0,Math.floor((s-first[0].length)/2)):Math.max(0,Math.min(s-1,Math.floor(s/2)-offset));writeWord(grid,first[0],row,col,firstDirection);entries.push({answer:first[0],clue:first[1],row,col,direction:firstDirection});const target=Math.min(bank.length,Math.max(4,Math.floor(s*.85)));for(const [word,clue] of bank.slice(1)){let best=null;for(const placed of entries){for(let wi=0;wi<word.length;wi++){for(let pi=0;pi<placed.answer.length;pi++){if(word[wi]!==placed.answer[pi])continue;const direction=placed.direction==="across"?"down":"across";const crossR=placed.row+(placed.direction==="down"?pi:0),crossC=placed.col+(placed.direction==="across"?pi:0);const startR=crossR-(direction==="down"?wi:0),startC=crossC-(direction==="across"?wi:0);const crossings=canPlace(grid,word,startR,startC,direction,s);if(crossings===null||crossings<1)continue;const edgePenalty=Math.min(startR,startC,s-1-startR,s-1-startC);const score=crossings*20+edgePenalty+seeded(seed+wi*17+pi*13);if(!best||score>best.score)best={row:startR,col:startC,direction,score}}}}if(best){writeWord(grid,word,best.row,best.col,best.direction);entries.push({answer:word,clue,row:best.row,col:best.col,direction:best.direction})}if(entries.length>=target)break}const starts=[...new Set(entries.map(e=>`${e.row},${e.col}`))].sort((a,b)=>{const[ar,ac]=a.split(',').map(Number),[br,bc]=b.split(',').map(Number);return ar-br||ac-bc});const nums=new Map(starts.map((k,i)=>[k,i+1]));entries.forEach(e=>e.number=nums.get(`${e.row},${e.col}`));return{d,s,l,id:id(d,s,l),grid,entries,date:dateForLevel(l)}}'''
+
+          pattern = r'function makePuzzle\(d,s,l\)\{.*?return\{d,s,l,id:id\(d,s,l\),grid,entries,date:dateForLevel\(l\)\}\}'
+          updated, count = re.subn(pattern, new_generator, s, count=1, flags=re.S)
+          if count != 1:
+              raise SystemExit(f'Generator replacement failed: {count}')
+          p.write_text(updated)
+          PY
+      - name: Bump offline cache
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('service-worker.js')
+          s=p.read_text()
+          import re
+          s=re.sub(r'crossword-quest-public-v\d+', 'crossword-quest-public-v6', s, count=1)
+          p.write_text(s)
+          PY
+      - name: Commit generated grid improvements
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.js service-worker.js
+          git commit -m "Generate varied connected crossword layouts"
+          git push
