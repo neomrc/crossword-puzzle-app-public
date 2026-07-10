@@ -1,0 +1,78 @@
+name: Native-like crossword interaction polish
+
+on:
+  push:
+    paths:
+      - '.github/workflows/native-app-polish.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stabilize focus and viewport behavior
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('app.js')
+          source = path.read_text()
+
+          old_focus = "function focusSelected(){const input=cellElement(state.selected)?.querySelector('input');if(input){input.focus({preventScroll:true});if(input.value)input.select?.();else input.setSelectionRange?.(0,0)}}"
+          fallback_focus = "function focusSelected(){const input=cellElement(state.selected)?.querySelector('input');if(input){input.focus({preventScroll:true});input.setSelectionRange?.(input.value.length,input.value.length)}}"
+          new_focus = """function focusSelected(){const input=cellElement(state.selected)?.querySelector('input');if(!input)return;const x=window.scrollX,y=window.scrollY;try{input.focus({preventScroll:true})}catch{input.focus()}try{if(input.value)input.setSelectionRange(0,input.value.length);else input.setSelectionRange(0,0)}catch{}requestAnimationFrame(()=>window.scrollTo(x,y))}"""
+          if old_focus in source:
+              source = source.replace(old_focus,new_focus,1)
+          elif fallback_focus in source:
+              source = source.replace(fallback_focus,new_focus,1)
+          else:
+              raise SystemExit('focusSelected function not found')
+
+          # Prevent browser click focus from racing the app's cell selection logic.
+          cell_listener = "cell.addEventListener('click',()=>selectCell(pos,true));"
+          replacement = "cell.addEventListener('pointerdown',e=>{e.preventDefault();selectCell(pos,true)});"
+          if cell_listener in source:
+              source = source.replace(cell_listener,replacement,1)
+
+          # Add visual viewport tracking without forcing page scroll.
+          bootstrap = "if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./service-worker.js'));render();"
+          viewport_code = """function syncVisualViewport(){const viewport=window.visualViewport;if(!viewport)return;const keyboard=Math.max(0,window.innerHeight-viewport.height-viewport.offsetTop);document.documentElement.style.setProperty('--keyboard-inset',`${keyboard}px`);document.body.classList.toggle('keyboard-open',keyboard>120)}
+if(window.visualViewport){visualViewport.addEventListener('resize',syncVisualViewport);visualViewport.addEventListener('scroll',syncVisualViewport);syncVisualViewport()}
+if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./service-worker.js'));render();"""
+          if bootstrap in source:
+              source = source.replace(bootstrap,viewport_code,1)
+          elif 'syncVisualViewport' not in source:
+              source += '\n' + viewport_code + '\n'
+
+          path.write_text(source)
+          PY
+
+      - name: Add native app CSS behavior
+        run: |
+          cat >> styles.css <<'CSS'
+          html{height:100%;overflow-x:hidden;-webkit-text-size-adjust:100%;overscroll-behavior:none}body{min-height:100%;overflow-x:hidden;overscroll-behavior:none;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}.app-shell{min-height:100dvh}.game-page{min-height:calc(100dvh - 58px)}button,.cell,.clue{-webkit-tap-highlight-color:transparent}.grid{contain:layout paint;transform:translateZ(0);backface-visibility:hidden}.cell{overflow:hidden;user-select:none;-webkit-user-select:none}.cell input{font-size:clamp(16px,58cqw,32px)!important;caret-color:transparent!important;user-select:none;-webkit-user-select:none;-webkit-appearance:none;appearance:none;border-radius:0;touch-action:manipulation;transform:translateZ(0)}.cell input:focus{outline:none}.cell.active{box-shadow:inset 0 0 0 2px var(--ink);z-index:3}.cell.related{transition:background-color .08s linear}.bottom-clue{transform:translateZ(0);will-change:transform}.keyboard-open .masthead{position:relative}.keyboard-open .game-page{padding-bottom:70px}.keyboard-open .bottom-clue{position:fixed;bottom:var(--keyboard-inset,0px)}@media(max-width:800px){body{position:relative}.game-top{position:relative;z-index:5;background:#fff}.board-wrap{scroll-margin-top:0}.grid{width:min(100vw - 8px,calc(100dvh - 210px));max-width:100%;margin-inline:auto}.cell input{font-size:clamp(16px,57cqw,29px)!important}.toolbar{position:relative;z-index:4;background:#fff}.keyboard-open .toolbar{display:none}.keyboard-open .game-top{display:none}.keyboard-open .game-page{padding-top:4px}.keyboard-open .grid{width:min(100vw - 8px,calc(100dvh - var(--keyboard-inset,0px) - 72px))}}
+          CSS
+
+      - name: Bump cache
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          path=Path('service-worker.js')
+          source=path.read_text()
+          source=re.sub(r'crossword-quest-public-v\d+', 'crossword-quest-public-v12', source, count=1)
+          path.write_text(source)
+          PY
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.js styles.css service-worker.js
+          git commit -m "Polish crossword interactions for a native app feel"
+          git push
