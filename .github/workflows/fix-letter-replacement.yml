@@ -1,0 +1,60 @@
+name: Fix editing filled crossword cells
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-letter-replacement.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch filled-cell replacement behavior
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('app.js')
+          s = p.read_text()
+
+          old_focus = '''function focusSelected(){const input=cellElement(state.selected)?.querySelector('input');if(input){input.focus({preventScroll:true});input.setSelectionRange?.(input.value.length,input.value.length)}}'''
+          new_focus = '''function focusSelected(){const input=cellElement(state.selected)?.querySelector('input');if(input){input.focus({preventScroll:true});if(input.value)input.select?.();else input.setSelectionRange?.(0,0)}}'''
+          if old_focus not in s:
+              raise SystemExit('focusSelected block not found')
+          s = s.replace(old_focus,new_focus,1)
+
+          old_before = '''input.addEventListener('beforeinput',e=>{if(e.inputType==='insertText'&&e.data&&!/[a-zA-Z]/.test(e.data))e.preventDefault()});'''
+          new_before = '''input.addEventListener('beforeinput',e=>{if(e.inputType==='insertText'){const letter=String(e.data||'').toUpperCase().match(/[A-Z]/)?.[0]||'';e.preventDefault();if(!letter)return;input.value=letter;progress[state.puzzle.id].answers[cell.dataset.cell]=letter;cell.classList.remove('wrong');save();updateProgress();move(activeEntry(state.puzzle),1);updateSelectionUI();requestAnimationFrame(focusSelected)}else if(e.inputType==='deleteContentBackward'&&input.value){e.preventDefault();input.value='';progress[state.puzzle.id].answers[cell.dataset.cell]='';cell.classList.remove('wrong');save();updateProgress()}});'''
+          if old_before not in s:
+              raise SystemExit('beforeinput block not found')
+          s = s.replace(old_before,new_before,1)
+
+          old_input = '''input.addEventListener('input',e=>{const chars=(e.target.value||'').toUpperCase().match(/[A-Z]/g);const value=chars?chars.at(-1):'';e.target.value=value;progress[state.puzzle.id].answers[cell.dataset.cell]=value;cell.classList.remove('wrong');save();updateProgress();if(value){move(activeEntry(state.puzzle),1);updateSelectionUI();requestAnimationFrame(focusSelected)}});'''
+          new_input = '''input.addEventListener('input',e=>{const chars=(e.target.value||'').toUpperCase().match(/[A-Z]/g);const value=chars?chars.at(-1):'';e.target.value=value;progress[state.puzzle.id].answers[cell.dataset.cell]=value;cell.classList.remove('wrong');save();updateProgress()});'''
+          if old_input not in s:
+              raise SystemExit('input fallback block not found')
+          s = s.replace(old_input,new_input,1)
+
+          p.write_text(s)
+          PY
+      - name: Bump cache
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('service-worker.js')
+          s=p.read_text()
+          s=re.sub(r'crossword-quest-public-v\d+', 'crossword-quest-public-v10', s, count=1)
+          p.write_text(s)
+          PY
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.js service-worker.js
+          git commit -m "Allow overwriting previously entered crossword letters"
+          git push
