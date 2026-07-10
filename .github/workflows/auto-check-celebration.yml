@@ -1,0 +1,113 @@
+name: Add auto-check and completion celebration
+
+on:
+  push:
+    paths:
+      - '.github/workflows/auto-check-celebration.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch crossword interactions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('app.js')
+          source = path.read_text()
+
+          # Persisted preference and completion-dialog state.
+          state_pattern = r'let state=\{screen:"home",difficulty:"easy",size:5,puzzle:null,selected:null,direction:"across",tab:"across",checked:false([^}]*)\};'
+          state_replacement = 'let state={screen:"home",difficulty:"easy",size:5,puzzle:null,selected:null,direction:"across",tab:"across",checked:false,autoCheck:localStorage.getItem("crossword-auto-check")==="true",showCelebration:false\\1};'
+          source, count = re.subn(state_pattern, state_replacement, source, count=1)
+          if count != 1:
+              raise SystemExit('Unable to patch state')
+
+          # Add evaluation helpers before verify().
+          verify_marker = 'function verify(){'
+          helpers = '''function isPuzzleComplete(){const p=state.puzzle,saved=progress[p.id];return p.grid.every((row,r)=>row.every((letter,c)=>letter==="#"||saved.answers[`${r},${c}`]===letter))}
+function evaluateCell(cell,key,value){if(!state.autoCheck||!value){cell.classList.remove('wrong');return}const[r,c]=key.split(',').map(Number);cell.classList.toggle('wrong',value!==state.puzzle.grid[r][c])}
+function finishPuzzleIfSolved(){if(!state.puzzle||!isPuzzleComplete())return false;const saved=progress[state.puzzle.id];if(saved.completed&&!state.showCelebration)return true;saved.completed=true;save();state.showCelebration=true;document.querySelectorAll('.cell input').forEach(input=>input.disabled=true);showCelebration();return true}
+function showCelebration(){document.querySelector('.celebration-overlay')?.remove();const overlay=document.createElement('div');overlay.className='celebration-overlay';overlay.innerHTML=`<div class="celebration-card" role="dialog" aria-modal="true" aria-labelledby="celebrationTitle"><div class="celebration-burst" aria-hidden="true">✦</div><div class="eyebrow">Puzzle complete</div><h2 id="celebrationTitle">Hooray!</h2><p>You solved the ${state.puzzle.s} × ${state.puzzle.s} ${state.puzzle.d} crossword.</p><button class="celebration-primary" id="celebrationHome">Back to puzzles</button><button class="celebration-secondary" id="celebrationClose">View completed grid</button></div>`;document.body.appendChild(overlay);document.querySelector('#celebrationHome').onclick=()=>{state.showCelebration=false;state.screen='home';state.puzzle=null;render()};document.querySelector('#celebrationClose').onclick=()=>{state.showCelebration=false;overlay.remove()}}
+'''
+          if helpers not in source:
+              index = source.find(verify_marker)
+              if index < 0:
+                  raise SystemExit('verify marker missing')
+              source = source[:index] + helpers + source[index:]
+
+          # Add the toggle beside the check controls and keep manual Check available.
+          toolbar_old = '<button class="tool-btn" id="reveal">Reveal</button><button class="tool-btn" id="check">Check</button>'
+          toolbar_new = '<button class="tool-btn" id="reveal">Reveal</button><button class="tool-btn" id="check">Check</button><label class="auto-check-control"><input type="checkbox" id="autoCheck" ${state.autoCheck?"checked":""}><span class="auto-check-track"><span></span></span><strong>Auto-check</strong></label>'
+          if toolbar_old not in source:
+              raise SystemExit('toolbar marker missing')
+          source = source.replace(toolbar_old, toolbar_new, 1)
+
+          # Bind the preference.
+          bind_marker = "document.querySelector('#check')?.addEventListener('click',()=>{state.checked=true;setWrongClasses();focusSelected()});"
+          bind_replacement = bind_marker + "document.querySelector('#autoCheck')?.addEventListener('change',e=>{state.autoCheck=e.target.checked;localStorage.setItem('crossword-auto-check',String(state.autoCheck));if(state.autoCheck)setWrongClasses();else document.querySelectorAll('.cell.wrong').forEach(cell=>cell.classList.remove('wrong'));focusSelected()});"
+          if bind_marker not in source:
+              raise SystemExit('check binding missing')
+          source = source.replace(bind_marker, bind_replacement, 1)
+
+          # Auto-check and completion after the explicit beforeinput overwrite path.
+          before_old = "progress[state.puzzle.id].answers[cell.dataset.cell]=letter;cell.classList.remove('wrong');save();updateProgress();move(activeEntry(state.puzzle),1);updateSelectionUI();requestAnimationFrame(focusSelected)"
+          before_new = "progress[state.puzzle.id].answers[cell.dataset.cell]=letter;save();evaluateCell(cell,cell.dataset.cell,letter);updateProgress();if(finishPuzzleIfSolved())return;move(activeEntry(state.puzzle),1);updateSelectionUI();requestAnimationFrame(focusSelected)"
+          if before_old in source:
+              source = source.replace(before_old, before_new, 1)
+          else:
+              print('Explicit beforeinput replacement path not found; patching fallback only')
+
+          # Auto-check and completion for the normal input fallback.
+          input_old = "progress[state.puzzle.id].answers[cell.dataset.cell]=value;cell.classList.remove('wrong');save();updateProgress()"
+          input_new = "progress[state.puzzle.id].answers[cell.dataset.cell]=value;save();evaluateCell(cell,cell.dataset.cell,value);updateProgress();finishPuzzleIfSolved()"
+          if input_old not in source:
+              raise SystemExit('input update path missing')
+          source = source.replace(input_old, input_new, 1)
+
+          # Reveal can also complete the puzzle.
+          reveal_old = "cellElement(state.selected)?.classList.remove('wrong');save();updateProgress();focusSelected()"
+          reveal_new = "cellElement(state.selected)?.classList.remove('wrong');save();updateProgress();if(!finishPuzzleIfSolved())focusSelected()"
+          if reveal_old in source:
+              source = source.replace(reveal_old, reveal_new, 1)
+
+          # Opening an already completed puzzle should not immediately celebrate, but inputs stay editable only for unfinished puzzles.
+          game_saved = 'const p=state.puzzle,saved=progress[p.id]||(progress[p.id]={answers:{},completed:false});'
+          game_saved_new = 'const p=state.puzzle,saved=progress[p.id]||(progress[p.id]={answers:{},completed:false});state.showCelebration=false;'
+          if game_saved in source:
+              source = source.replace(game_saved, game_saved_new, 1)
+
+          path.write_text(source)
+          PY
+
+      - name: Add celebration and toggle styles
+        run: |
+          cat >> styles.css <<'CSS'
+          .auto-check-control{display:inline-flex;align-items:center;gap:8px;min-height:42px;padding:7px 10px;border:1px solid var(--ink);background:#fff;cursor:pointer;user-select:none}.auto-check-control input{position:absolute;opacity:0;pointer-events:none}.auto-check-control strong{font-size:13px;white-space:nowrap}.auto-check-track{position:relative;width:34px;height:20px;border-radius:999px;background:#c9c9c9;transition:.2s}.auto-check-track span{position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:.2s}.auto-check-control input:checked+.auto-check-track{background:var(--ink)}.auto-check-control input:checked+.auto-check-track span{transform:translateX(14px)}.auto-check-control:focus-within{outline:2px solid var(--ink);outline-offset:2px}.celebration-overlay{position:fixed;inset:0;z-index:120;display:grid;place-items:center;padding:20px;background:rgba(0,0,0,.52);backdrop-filter:blur(6px)}.celebration-card{position:relative;width:min(420px,100%);overflow:hidden;border:1px solid var(--ink);background:#fff;padding:38px 28px 26px;text-align:center;box-shadow:0 28px 90px rgba(0,0,0,.28);animation:celebration-in .32s ease-out}.celebration-card:before,.celebration-card:after{content:'';position:absolute;width:150px;height:150px;border-radius:50%;background:var(--accent);opacity:.24}.celebration-card:before{top:-95px;left:-70px}.celebration-card:after{right:-75px;bottom:-105px}.celebration-burst{position:relative;z-index:1;display:grid;place-items:center;width:66px;height:66px;margin:0 auto 18px;border:1px solid var(--ink);border-radius:50%;background:var(--accent);font-size:31px;animation:celebration-spin .55s ease-out}.celebration-card h2{position:relative;z-index:1;margin:5px 0 9px;font-family:Georgia,'Times New Roman',serif;font-size:44px;line-height:1}.celebration-card p{position:relative;z-index:1;margin:0 auto 24px;max-width:310px;color:var(--muted);line-height:1.5}.celebration-primary,.celebration-secondary{position:relative;z-index:1;width:100%;min-height:46px;font-weight:700}.celebration-primary{border:1px solid var(--ink);background:var(--ink);color:#fff}.celebration-secondary{margin-top:9px;border:1px solid var(--ink);background:#fff;color:var(--ink)}@keyframes celebration-in{from{opacity:0;transform:translateY(14px) scale(.96)}to{opacity:1;transform:none}}@keyframes celebration-spin{from{transform:rotate(-35deg) scale(.65)}to{transform:none}}@media(max-width:800px){.auto-check-control{min-height:40px;padding:6px 8px}.auto-check-control strong{font-size:12px}.celebration-card{padding:32px 20px 22px}.celebration-card h2{font-size:38px}}
+          CSS
+
+      - name: Bump offline cache
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          path=Path('service-worker.js')
+          source=path.read_text()
+          source=re.sub(r'crossword-quest-public-v\d+', 'crossword-quest-public-v11', source, count=1)
+          path.write_text(source)
+          PY
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.js styles.css service-worker.js
+          git commit -m "Add auto-check toggle and puzzle completion celebration"
+          git push
