@@ -1,0 +1,11 @@
+{
+  "name": "Crossword Quest",
+  "short_name": "Crossword",
+  "description": "Offline-first crossword puzzles with multiple levels and difficulties.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f3ec",
+  "theme_color": "#171717",
+  "icons": [{"src":"./icons/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
+}
